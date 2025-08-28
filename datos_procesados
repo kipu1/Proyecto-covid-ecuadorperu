@@ -1,0 +1,5 @@
+df["incidencia_diaria"] = (df["new_cases"] / df["population"]) * 100000
+df["incidencia_7d"] = df.groupby("location")["incidencia_diaria"].rolling(7).mean().reset_index(0,drop=True)
+df["casos_7d"] = df.groupby("location")["new_cases"].rolling(7).sum().reset_index(0,drop=True)
+df["casos_7d_prev"] = df.groupby("location")["casos_7d"].shift(7)
+df["factor_crec_7d"] = df["casos_7d"] / df["casos_7d_prev"]

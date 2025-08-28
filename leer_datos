@@ -1,0 +1,48 @@
+import os, time, requests, pandas as pd
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
+from dagster import asset
+
+URL = "https://catalog.ourworldindata.org/garden/covid/latest/compact/compact.csv"
+LOCAL_PATH = "owid.csv"
+
+def _requests_session():
+    s = requests.Session()
+    retry = Retry(
+        total=5, connect=5, read=5, backoff_factor=1.5,
+        status_forcelist=[429,500,502,503,504],
+        allowed_methods=["GET"], raise_on_status=False,
+    )
+    adapter = HTTPAdapter(max_retries=retry, pool_connections=4, pool_maxsize=8)
+    s.mount("http://", adapter); s.mount("https://", adapter)
+    s.headers.update({"User-Agent":"pipeline-covid/1.0 (+requests; dagster asset)",
+                      "Accept":"text/csv,application/octet-stream;q=0.9,*/*;q=0.8"})
+    return s
+
+def _download_with_retries(url: str, dest: str):
+    sess = _requests_session()
+    with sess.get(url, stream=True, timeout=(10,120)) as r:
+        r.raise_for_status()
+        tmp = dest + ".part"
+        with open(tmp, "wb") as f:
+            for chunk in r.iter_content(chunk_size=1<<14):
+                if chunk: f.write(chunk)
+        os.replace(tmp, dest)
+
+@asset
+def leer_datos() -> pd.DataFrame:
+    if os.path.exists(LOCAL_PATH) and os.path.getsize(LOCAL_PATH) > 1024:
+        try:
+            return _normalize_columns(pd.read_csv(LOCAL_PATH))
+        except Exception:
+            pass
+    try:
+        _download_with_retries(URL, LOCAL_PATH)
+    except requests.exceptions.ChunkedEncodingError:
+        time.sleep(2); _download_with_retries(URL, LOCAL_PATH)
+    except requests.exceptions.RequestException as e:
+        raise RuntimeError(
+            f"Fallo de red descargando OWID: {e}. "
+            "Como alternativa, descarga manualmente 'compact.csv' y guárdalo como 'owid.csv' en la raíz."
+        )
+    return _normalize_columns(pd.read_csv(LOCAL_PATH))
